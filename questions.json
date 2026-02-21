@@ -1,0 +1,16 @@
+{
+  "questions": [
+    {
+      "type": "multiple_choice",
+      "question": "ما هي عاصمة السعودية؟",
+      "options": ["جدة", "الرياض", "الدمام"],
+      "answer": 2
+    },
+    {
+      "type": "multiple_choice",
+      "question": "أين تقع مدينة الدمام؟",
+      "options": ["الشرقية", "الغربية", "الجنوبية"],
+      "answer": 1
+    }
+  ]
+}
