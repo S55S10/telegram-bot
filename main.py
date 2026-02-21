@@ -165,6 +165,8 @@ def process_answer(chat_id, ans):
     else:
         correct = 1 if q["answer"] else 0
         is_correct = (int(ans) == correct)
+if is_correct:
+    user["score"] += 1
 
     if q["type"] == "multiple_choice":
         keyboard = []
