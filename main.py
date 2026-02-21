@@ -2,24 +2,22 @@ import json
 import time
 import requests
 import os
+from flask import Flask, request
+
+app = Flask(__name__)
 
 TOKEN = "8202773408:AAGLbNJDAUWQ-5KjvPc7aZaRO4k29XZKG0Y"
 API = f"https://api.telegram.org/bot{TOKEN}"
 
-# -----------------------------
-# 🔥 استخدام مسارات نسبية تعمل على Render
-# -----------------------------
 QUESTIONS_FILE = "questions.json"
 SAVE_FILE = "user_progress.json"
 
-# تحميل الأسئلة
 with open(QUESTIONS_FILE, "r", encoding="utf-8") as f:
     QUESTIONS = json.load(f)["questions"]
 
 TOTAL = len(QUESTIONS)
-TIME_LIMIT = 600  # 10 دقائق
+TIME_LIMIT = 600
 
-# تحميل بيانات المستخدمين
 def load_users():
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r", encoding="utf-8") as f:
@@ -32,13 +30,11 @@ def save_users():
 
 users = load_users()
 
-# التأكد من وجود المفاتيح
 def ensure_keys(chat_id):
     if chat_id not in users:
         users[chat_id] = {}
 
     user = users[chat_id]
-
     user.setdefault("index", 0)
     user.setdefault("score", 0)
     user.setdefault("start_from", 0)
@@ -47,14 +43,12 @@ def ensure_keys(chat_id):
 
     save_users()
 
-# إرسال رسالة
 def send_message(chat_id, text, reply_markup=None):
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = reply_markup
     requests.post(f"{API}/sendMessage", json=payload)
 
-# أزرار التحكم
 def send_controls(chat_id):
     markup = {
         "inline_keyboard": [
@@ -65,7 +59,6 @@ def send_controls(chat_id):
     }
     send_message(chat_id, "اختر:", markup)
 
-# إرسال سؤال
 def send_question(chat_id):
     ensure_keys(chat_id)
     user = users[chat_id]
@@ -83,7 +76,6 @@ def send_question(chat_id):
     markup = {"inline_keyboard": keyboard}
     send_message(chat_id, f"سؤال ({idx+1}/{TOTAL}):\n\n{q['question']}", markup)
 
-# بدء جديد
 def start_new(chat_id):
     users[chat_id] = {
         "index": 0,
@@ -95,7 +87,6 @@ def start_new(chat_id):
     save_users()
     send_question(chat_id)
 
-# الانتقال إلى سؤال
 def jump_to(chat_id, number):
     ensure_keys(chat_id)
 
@@ -111,7 +102,6 @@ def jump_to(chat_id, number):
     save_users()
     send_question(chat_id)
 
-# السؤال التالي
 def next_question(chat_id):
     ensure_keys(chat_id)
     user = users[chat_id]
@@ -127,7 +117,6 @@ def next_question(chat_id):
     save_users()
     send_question(chat_id)
 
-# معالجة الإجابة
 def process_answer(chat_id, ans):
     ensure_keys(chat_id)
     user = users[chat_id]
@@ -144,7 +133,6 @@ def process_answer(chat_id, ans):
 
     user["lastTime"] = now
 
-    # الإجابة الصحيحة
     if q["type"] == "multiple_choice":
         correct = q["answer"]
         correct_text = q["options"][correct - 1]
@@ -154,14 +142,12 @@ def process_answer(chat_id, ans):
         correct_text = "صح" if q["answer"] else "خطأ"
         is_correct = (int(ans) == correct)
 
-    # النتيجة
     if is_correct:
         user["score"] += 1
         result_msg = "✅ إجابة صحيحة"
     else:
         result_msg = "❌ إجابة خاطئة"
 
-    # مراجعة السؤال
     review = f"🔍 مراجعة السؤال ({idx+1}/{TOTAL}):\n\n{q['question']}\n\n"
 
     if q["type"] == "multiple_choice":
@@ -186,65 +172,55 @@ def process_answer(chat_id, ans):
 
     next_question(chat_id)
 
-# جلب التحديثات
-def get_updates(offset=None):
-    return requests.get(f"{API}/getUpdates", params={"timeout": 100, "offset": offset}).json()
+# -----------------------------
+# 🔥 Webhook endpoint
+# -----------------------------
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = request.get_json()
 
-# تشغيل البوت
-def run_bot():
-    print("Bot is running CLEAN FIXED VERSION...")
-    offset = None
+    if "message" in update:
+        chat_id = str(update["message"]["chat"]["id"])
+        text = update["message"].get("text", "").strip()
 
-    while True:
-        updates = get_updates(offset)
+        ensure_keys(chat_id)
 
-        if "result" in updates:
-            for update in updates["result"]:
-                offset = update["update_id"] + 1
+        if users[chat_id]["waiting_jump"]:
+            if text.isdigit():
+                jump_to(chat_id, int(text))
+            else:
+                send_message(chat_id, "❌ اكتب رقم فقط")
+            return "ok"
 
-                if "message" in update:
-                    chat_id = str(update["message"]["chat"]["id"])
-                    text = update["message"].get("text", "").strip()
+        send_controls(chat_id)
+        return "ok"
 
-                    ensure_keys(chat_id)
+    if "callback_query" in update:
+        chat_id = str(update["callback_query"]["message"]["chat"]["id"])
+        data = update["callback_query"]["data"]
 
-                    if users[chat_id]["waiting_jump"]:
-                        if text.isdigit():
-                            jump_to(chat_id, int(text))
-                        else:
-                            send_message(chat_id, "❌ اكتب رقم فقط")
-                        continue
+        ensure_keys(chat_id)
 
-                    send_controls(chat_id)
-                    continue
+        if data == "new":
+            start_new(chat_id)
+        elif data == "jump":
+            users[chat_id]["waiting_jump"] = True
+            save_users()
+            send_message(chat_id, "اكتب رقم السؤال الذي تريد الانتقال إليه:")
+        elif data == "stop":
+            user = users[chat_id]
+            answered = user["index"] - user["start_from"]
+            send_message(chat_id, f"تم إيقاف الاختبار.\nنتيجتك: {user['score']} من {answered}")
+            del users[chat_id]
+            save_users()
+        elif data.startswith("ans:"):
+            ans = data.split(":")[1]
+            process_answer(chat_id, ans)
 
-                if "callback_query" in update:
-                    chat_id = str(update["callback_query"]["message"]["chat"]["id"])
-                    data = update["callback_query"]["data"]
+    return "ok"
 
-                    ensure_keys(chat_id)
-
-                    if data == "new":
-                        start_new(chat_id)
-                        continue
-
-                    if data == "jump":
-                        users[chat_id]["waiting_jump"] = True
-                        save_users()
-                        send_message(chat_id, "اكتب رقم السؤال الذي تريد الانتقال إليه:")
-                        continue
-
-                    if data == "stop":
-                        user = users[chat_id]
-                        answered = user["index"] - user["start_from"]
-                        send_message(chat_id, f"تم إيقاف الاختبار.\nنتيجتك: {user['score']} من {answered}")
-                        del users[chat_id]
-                        save_users()
-                        continue
-
-                    if data.startswith("ans:"):
-                        ans = data.split(":")[1]
-                        process_answer(chat_id, ans)
-                        continue
-
-run_bot()
+# -----------------------------
+# 🔥 Run Flask
+# -----------------------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
