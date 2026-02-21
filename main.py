@@ -159,15 +159,19 @@ def process_answer(chat_id, ans):
 
     user["lastTime"] = now
 
+    # تحديد الإجابة الصحيحة
     if q["type"] == "multiple_choice":
         correct = q["answer"]
         is_correct = (int(ans) == correct)
     else:
         correct = 1 if q["answer"] else 0
         is_correct = (int(ans) == correct)
-if is_correct:
-    user["score"] += 1
 
+    # زيادة السكور
+    if is_correct:
+        user["score"] += 1
+
+    # تجهيز لوحة الأزرار المعدلة
     if q["type"] == "multiple_choice":
         keyboard = []
         for i, opt in enumerate(q["options"], start=1):
@@ -186,6 +190,7 @@ if is_correct:
 
     markup = {"inline_keyboard": keyboard}
 
+    # تعديل نفس الرسالة
     requests.post(f"{API}/editMessageReplyMarkup", json={
         "chat_id": chat_id,
         "message_id": user["last_message_id"],
