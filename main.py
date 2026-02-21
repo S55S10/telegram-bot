@@ -133,6 +133,7 @@ def process_answer(chat_id, ans):
 
     user["lastTime"] = now
 
+    # تحديد الإجابة الصحيحة
     if q["type"] == "multiple_choice":
         correct = q["answer"]
         correct_text = q["options"][correct - 1]
@@ -142,39 +143,45 @@ def process_answer(chat_id, ans):
         correct_text = "صح" if q["answer"] else "خطأ"
         is_correct = (int(ans) == correct)
 
-    if is_correct:
-        user["score"] += 1
-        result_msg = "✅ إجابة صحيحة"
-    else:
-        result_msg = "❌ إجابة خاطئة"
-
-    review = f"🔍 مراجعة السؤال ({idx+1}/{TOTAL}):\n\n{q['question']}\n\n"
-
+    # -----------------------------
+    # 🔥 تمييز الأزرار بعد الإجابة
+    # -----------------------------
     if q["type"] == "multiple_choice":
+        keyboard = []
         for i, opt in enumerate(q["options"], start=1):
-            mark = ""
-            if i == int(ans):
-                mark = "🔸 (اختياري)"
+
             if i == correct:
-                mark = "✔ (الإجابة الصحيحة)"
-            review += f"- {opt} {mark}\n"
+                text = f"{opt} ✔️"
+            elif i == int(ans):
+                text = f"{opt} ❌"
+            else:
+                text = opt
+
+            keyboard.append([{"text": text, "callback_data": "disabled"}])
+
     else:
         user_choice = "صح" if ans == "1" else "خطأ"
-        review += f"- اختيارك: {user_choice}\n"
-        review += f"- الإجابة الصحيحة: {correct_text}\n"
+        correct_choice = "صح" if q["answer"] else "خطأ"
 
-    if "solution" in q:
-        review += f"\n📘 الشرح:\n{q['solution']}"
-    elif "explanation" in q:
-        review += f"\n📘 الشرح:\n{q['explanation']}"
+        keyboard = [
+            [{"text": f"صح {'✔️' if correct_choice=='صح' else ('❌' if user_choice=='صح' else '')}", "callback_data": "disabled"}],
+            [{"text": f"خطأ {'✔️' if correct_choice=='خطأ' else ('❌' if user_choice=='خطأ' else '')}", "callback_data": "disabled"}]
+        ]
 
-    send_message(chat_id, f"{result_msg}\n\n{review}")
+    markup = {"inline_keyboard": keyboard}
+
+    # -----------------------------
+    # 🔥 رسالة مختصرة وواضحة
+    # -----------------------------
+    if is_correct:
+        msg = "✅ إجابة صحيحة"
+    else:
+        msg = f"❌ إجابة خاطئة\n\nالإجابة الصحيحة: {correct_text}"
+
+    send_message(chat_id, msg, markup)
 
     next_question(chat_id)
 
-# -----------------------------
-# 🔥 Webhook endpoint
-# -----------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = request.get_json()
@@ -219,8 +226,5 @@ def webhook():
 
     return "ok"
 
-# -----------------------------
-# 🔥 Run Flask
-# -----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
