@@ -144,7 +144,7 @@ def process_answer(chat_id, ans):
         is_correct = (int(ans) == correct)
 
     # -----------------------------
-    # 🔥 تمييز الأزرار بعد الإجابة
+    # 🔥 إعادة إرسال الأزرار مع تمييز الإجابة
     # -----------------------------
     if q["type"] == "multiple_choice":
         keyboard = []
