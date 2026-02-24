@@ -12,12 +12,15 @@ API = f"https://api.telegram.org/bot{TOKEN}"
 QUESTIONS_FILE = "questions.json"
 SAVE_FILE = "user_progress.json"
 
+# تحميل الأسئلة
 with open(QUESTIONS_FILE, "r", encoding="utf-8") as f:
     QUESTIONS = json.load(f)
 
 TOTAL = len(QUESTIONS)
-TIME_LIMIT = 600
+TIME_LIMIT = 600  # 10 دقائق
 
+
+# ------------------ إدارة المستخدمين ------------------
 
 def load_users():
     if os.path.exists(SAVE_FILE):
@@ -49,12 +52,26 @@ def ensure_keys(chat_id):
     save_users()
 
 
+# ------------------ إرسال الرسائل ------------------
+
 def send_message(chat_id, text, reply_markup=None):
-    payload = {"chat_id": chat_id, "text": text}
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
     if reply_markup:
         payload["reply_markup"] = reply_markup
+
     return requests.post(f"{API}/sendMessage", json=payload).json()
 
+
+def answer_callback(callback_id):
+    requests.post(f"{API}/answerCallbackQuery", json={
+        "callback_query_id": callback_id
+    })
+
+
+# ------------------ لوحة التحكم ------------------
 
 def send_controls(chat_id):
     markup = {
@@ -67,10 +84,16 @@ def send_controls(chat_id):
     send_message(chat_id, "اختر:", markup)
 
 
+# ------------------ إرسال السؤال ------------------
+
 def send_question(chat_id):
     ensure_keys(chat_id)
     user = users[chat_id]
     idx = user["index"]
+
+    if idx >= TOTAL:
+        return
+
     q = QUESTIONS[idx]
 
     if q["type"] == "multiple_choice":
@@ -79,12 +102,10 @@ def send_question(chat_id):
             for i, opt in enumerate(q["options"])
         ]
     else:
-        keyboard = [
-            [
-                {"text": "صح", "callback_data": "ans:1"},
-                {"text": "خطأ", "callback_data": "ans:0"}
-            ]
-        ]
+        keyboard = [[
+            {"text": "صح", "callback_data": "ans:1"},
+            {"text": "خطأ", "callback_data": "ans:0"}
+        ]]
 
     markup = {"inline_keyboard": keyboard}
 
@@ -94,9 +115,12 @@ def send_question(chat_id):
         "reply_markup": markup
     }).json()
 
-    users[chat_id]["last_message_id"] = res["result"]["message_id"]
-    save_users()
+    if res.get("ok"):
+        users[chat_id]["last_message_id"] = res["result"]["message_id"]
+        save_users()
 
+
+# ------------------ بدء اختبار جديد ------------------
 
 def start_new(chat_id):
     users[chat_id] = {
@@ -110,6 +134,8 @@ def start_new(chat_id):
     save_users()
     send_question(chat_id)
 
+
+# ------------------ الانتقال لسؤال ------------------
 
 def jump_to(chat_id, number):
     ensure_keys(chat_id)
@@ -127,6 +153,8 @@ def jump_to(chat_id, number):
     send_question(chat_id)
 
 
+# ------------------ السؤال التالي ------------------
+
 def next_question(chat_id):
     ensure_keys(chat_id)
     user = users[chat_id]
@@ -135,7 +163,7 @@ def next_question(chat_id):
     if user["index"] >= TOTAL:
         answered = user["index"] - user["start_from"]
         send_message(chat_id, f"🎉 انتهى الاختبار!\nنتيجتك: {user['score']} من {answered}")
-        del users[chat_id]
+        users.pop(chat_id, None)
         save_users()
         return
 
@@ -143,17 +171,23 @@ def next_question(chat_id):
     send_question(chat_id)
 
 
+# ------------------ معالجة الإجابة ------------------
+
 def process_answer(chat_id, ans):
     ensure_keys(chat_id)
     user = users[chat_id]
     idx = user["index"]
+
+    if idx >= TOTAL:
+        return
+
     q = QUESTIONS[idx]
 
     now = time.time()
     if now - user["lastTime"] > TIME_LIMIT:
         answered = user["index"] - user["start_from"]
         send_message(chat_id, f"⏳ انتهى الوقت!\nنتيجتك: {user['score']} من {answered}")
-        del users[chat_id]
+        users.pop(chat_id, None)
         save_users()
         return
 
@@ -167,13 +201,13 @@ def process_answer(chat_id, ans):
         correct = 1 if q["answer"] else 0
         is_correct = (int(ans) == correct)
 
-    # زيادة السكور
     if is_correct:
         user["score"] += 1
 
-    # تجهيز لوحة الأزرار المعدلة
+    # تعديل الأزرار
+    keyboard = []
+
     if q["type"] == "multiple_choice":
-        keyboard = []
         for i, opt in enumerate(q["options"], start=1):
             if i == correct:
                 text = f"{opt} ✔️"
@@ -181,24 +215,26 @@ def process_answer(chat_id, ans):
                 text = f"{opt} ❌"
             else:
                 text = opt
-            keyboard.append([{"text": text, "callback_data": "disabled"}])
+            keyboard.append([{"text": text, "callback_data": "done"}])
     else:
-        keyboard = [
-            [{"text": f"صح {'✔️' if correct == 1 else ''}", "callback_data": "disabled"}],
-            [{"text": f"خطأ {'✔️' if correct == 0 else ''}", "callback_data": "disabled"}]
-        ]
+        keyboard = [[
+            {"text": f"صح {'✔️' if correct == 1 else ''}", "callback_data": "done"},
+            {"text": f"خطأ {'✔️' if correct == 0 else ''}", "callback_data": "done"}
+        ]]
 
-    markup = {"inline_keyboard": keyboard}
-
-    # تعديل نفس الرسالة
-    requests.post(f"{API}/editMessageReplyMarkup", json={
-        "chat_id": chat_id,
-        "message_id": user["last_message_id"],
-        "reply_markup": markup
-    })
+    try:
+        requests.post(f"{API}/editMessageReplyMarkup", json={
+            "chat_id": chat_id,
+            "message_id": user["last_message_id"],
+            "reply_markup": {"inline_keyboard": keyboard}
+        })
+    except:
+        pass
 
     next_question(chat_id)
 
+
+# ------------------ Webhook ------------------
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
@@ -223,7 +259,9 @@ def webhook():
     if "callback_query" in update:
         chat_id = str(update["callback_query"]["message"]["chat"]["id"])
         data = update["callback_query"]["data"]
+        callback_id = update["callback_query"]["id"]
 
+        answer_callback(callback_id)
         ensure_keys(chat_id)
 
         if data == "new":
@@ -236,14 +274,16 @@ def webhook():
             user = users[chat_id]
             answered = user["index"] - user["start_from"]
             send_message(chat_id, f"تم إيقاف الاختبار.\nنتيجتك: {user['score']} من {answered}")
-            del users[chat_id]
+            users.pop(chat_id, None)
             save_users()
         elif data.startswith("ans:"):
             ans = data.split(":")[1]
             process_answer(chat_id, ans)
 
+        return "ok"
+
     return "ok"
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run()
