@@ -13,7 +13,7 @@ QUESTIONS_FILE = "questions.json"
 SAVE_FILE = "user_progress.json"
 
 with open(QUESTIONS_FILE, "r", encoding="utf-8") as f:
-    QUESTIONS = json.load(f)["questions"]
+    QUESTIONS = json.load(f)
 
 TOTAL = len(QUESTIONS)
 TIME_LIMIT = 600
