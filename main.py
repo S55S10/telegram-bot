@@ -6,6 +6,7 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
+# ضع التوكن الخاص بك هنا
 TOKEN = "8202773408:AAGLbNJDAUWQ-5KjvPc7aZaRO4k29XZKG0Y"
 API = f"https://api.telegram.org/bot{TOKEN}"
 
@@ -20,7 +21,6 @@ with open(QUESTIONS_FILE, "r", encoding="utf-8") as f:
 TOTAL = len(QUESTIONS)
 TIME_LIMIT = 600
 
-
 # ------------------ إدارة المستخدمين ------------------
 
 def load_users():
@@ -29,14 +29,11 @@ def load_users():
             return json.load(f)
     return {}
 
-
 def save_users():
     with open(SAVE_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, ensure_ascii=False, indent=2)
 
-
 users = load_users()
-
 
 def ensure_keys(chat_id):
     if chat_id not in users:
@@ -49,9 +46,7 @@ def ensure_keys(chat_id):
     user.setdefault("lastTime", time.time())
     user.setdefault("waiting_jump", False)
     user.setdefault("last_message_id", None)
-
     save_users()
-
 
 # ------------------ الإرسال ------------------
 
@@ -62,21 +57,27 @@ def send_message(chat_id, text, reply_markup=None):
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
-
     return requests.post(f"{API}/sendMessage", json=payload).json()
-
 
 def answer_callback(callback_id):
     requests.post(f"{API}/answerCallbackQuery", json={
         "callback_query_id": callback_id
     })
 
+def send_controls(chat_id):
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "🏁 بدء اختبار جديد", "callback_data": "new"}],
+            [{"text": "🚀 انتقال لسؤال محدد", "callback_data": "jump"},
+             {"text": "🛑 إيقاف", "callback_data": "stop"}]
+        ]
+    }
+    send_message(chat_id, "قائمة التحكم:", keyboard)
 
 # ------------------ الأسئلة ------------------
 
 def send_question(chat_id):
     ensure_keys(chat_id)
-
     user = users[chat_id]
     idx = user["index"]
 
@@ -85,16 +86,11 @@ def send_question(chat_id):
 
     q = QUESTIONS[idx]
 
-    if q["type"] == "multiple_choice":
-        keyboard = [
-            [{"text": opt, "callback_data": f"ans:{i+1}"}]
-            for i, opt in enumerate(q["options"])
-        ]
-    else:
-        keyboard = [[
-            {"text": "صح", "callback_data": "ans:1"},
-            {"text": "خطأ", "callback_data": "ans:0"}
-        ]]
+    # تم تعديل i+1 إلى i ليتوافق مع نظام الـ Index (0,1,2,3)
+    keyboard = [
+        [{"text": opt, "callback_data": f"ans:{i}"}]
+        for i, opt in enumerate(q["options"])
+    ]
 
     res = send_message(
         chat_id,
@@ -105,7 +101,6 @@ def send_question(chat_id):
     if res.get("ok"):
         users[chat_id]["last_message_id"] = res["result"]["message_id"]
         save_users()
-
 
 # ------------------ التحكم ------------------
 
@@ -121,7 +116,6 @@ def start_new(chat_id):
     save_users()
     send_question(chat_id)
 
-
 def next_question(chat_id):
     user = users[chat_id]
     user["index"] += 1
@@ -129,7 +123,7 @@ def next_question(chat_id):
     if user["index"] >= TOTAL:
         answered = user["index"] - user["start_from"]
         send_message(chat_id,
-                     f"🎉 انتهى الاختبار\nالنتيجة: {user['score']} من {answered}")
+                     f"🎉 انتهى الاختبار\nالنتيجة النهائية: {user['score']} من {answered}")
         users.pop(chat_id, None)
         save_users()
         return
@@ -137,39 +131,36 @@ def next_question(chat_id):
     save_users()
     send_question(chat_id)
 
-
-# ------------------ الإجابات ------------------
+# ------------------ الإجابات (تعديل منطق العرض) ------------------
 
 def process_answer(chat_id, ans):
     user = users[chat_id]
     idx = user["index"]
-
     q = QUESTIONS[idx]
 
     now = time.time()
     if now - user["lastTime"] > TIME_LIMIT:
         answered = user["index"] - user["start_from"]
-        send_message(chat_id,
-                     f"⏳ انتهى الوقت\nالنتيجة: {user['score']} من {answered}")
+        send_message(chat_id, f"⏳ انتهى الوقت\nالنتيجة: {user['score']} من {answered}")
         users.pop(chat_id, None)
         save_users()
         return
 
     user["lastTime"] = now
 
-    correct = q["answer"]
-    is_correct = (int(ans) == correct)
+    # تعديل لجلب answer_index من ملف الـ JSON الجديد
+    correct_idx = q["answer_index"]
+    user_ans_idx = int(ans)
 
-    if is_correct:
+    if user_ans_idx == correct_idx:
         user["score"] += 1
 
-    # تعديل الأزرار
+    # تعديل الأزرار لإظهار النتيجة على الخيارات
     keyboard = []
-
-    for i, opt in enumerate(q["options"], start=1):
-        if i == correct:
+    for i, opt in enumerate(q["options"]):
+        if i == correct_idx:
             text = f"{opt} ✔️"
-        elif i == int(ans):
+        elif i == user_ans_idx: # إذا كان هذا هو اختيارك وهو خاطئ
             text = f"{opt} ❌"
         else:
             text = opt
@@ -187,7 +178,6 @@ def process_answer(chat_id, ans):
 
     next_question(chat_id)
 
-
 # ------------------ Webhook ------------------
 
 @app.route(f"/{TOKEN}", methods=["POST"])
@@ -199,7 +189,24 @@ def webhook():
         text = update["message"].get("text", "").strip()
 
         ensure_keys(chat_id)
+        user = users[chat_id]
 
+        # معالجة القفز لسؤال معين
+        if user.get("waiting_jump"):
+            if text.isdigit():
+                target = int(text) - 1
+                if 0 <= target < TOTAL:
+                    user["index"] = target
+                    user["start_from"] = target
+                    user["score"] = 0
+                    user["waiting_jump"] = False
+                    save_users()
+                    send_question(chat_id)
+                else:
+                    send_message(chat_id, f"أدخل رقم بين 1 و {TOTAL}")
+            return "ok"
+
+        # إظهار القائمة عند أي رسالة نصية
         send_controls(chat_id)
         return "ok"
 
@@ -213,27 +220,22 @@ def webhook():
 
         if data == "new":
             start_new(chat_id)
-
         elif data == "jump":
             users[chat_id]["waiting_jump"] = True
             save_users()
-            send_message(chat_id, "اكتب رقم السؤال")
-
+            send_message(chat_id, "اكتب رقم السؤال الذي تريد البدء منه:")
         elif data == "stop":
             user = users[chat_id]
             answered = user["index"] - user["start_from"]
-            send_message(chat_id,
-                         f"تم الإيقاف\nالنتيجة: {user['score']} من {answered}")
+            send_message(chat_id, f"🛑 تم الإيقاف\nالنتيجة الحالية: {user['score']} من {answered}")
             users.pop(chat_id, None)
             save_users()
-
         elif data.startswith("ans:"):
             process_answer(chat_id, data.split(":")[1])
 
         return "ok"
 
     return "ok"
-
 
 # ------------------ تشغيل السيرفر ------------------
 
