@@ -57,7 +57,7 @@ def ensure_keys(chat_id):
     user.setdefault("last_message_id", None)
     user.setdefault("questions", [])
     user.setdefault("current_chapter", None)
-    user.setdefault("messages", [])
+    user.setdefault("messages", [])  # لتخزين رسائل البوت لحذفها عند انتهاء الوقت
     save_users()
 
 # ------------------ أدوات الإرسال ------------------
@@ -150,6 +150,25 @@ def start_chapter(chat_id, chapter_name):
     send_message(chat_id, f"تم بدء اختبار: {chapter_name}")
     send_question(chat_id)
 
+def start_abdulaziz(chat_id):
+    try:
+        questions = load_questions_from_file("questions.json")
+    except:
+        send_message(chat_id, "⚠️ لم يتم العثور على ملف questions.json")
+        return
+
+    users[chat_id]["questions"] = questions
+    users[chat_id]["current_chapter"] = "اختبار عبدالعزيز"
+    users[chat_id]["index"] = 0
+    users[chat_id]["score"] = 0
+    users[chat_id]["start_from"] = 0
+    users[chat_id]["lastTime"] = time.time()
+    users[chat_id]["waiting_jump"] = False
+    save_users()
+
+    send_message(chat_id, "تم بدء اختبار عبدالعزيز 🎯")
+    send_question(chat_id)
+
 def handle_timeout(chat_id):
     user = users.get(chat_id)
     if not user:
@@ -214,7 +233,7 @@ def finish_chapter(chat_id):
     questions = user.get("questions", [])
     answered = max(0, user["index"] - user["start_from"])
 
-    # ------------------ اختبار عبدالعزيز (بدون انتقال للفصل التالي) ------------------
+    # إذا كان اختبار عبدالعزيز → لا نعرض الانتقال للفصل التالي
     if user.get("current_chapter") == "اختبار عبدالعزيز":
         send_message(
             chat_id,
@@ -225,7 +244,6 @@ def finish_chapter(chat_id):
         save_users()
         send_start_button(chat_id)
         return
-    # ------------------------------------------------------------------------------
 
     total = len(questions)
 
@@ -328,34 +346,17 @@ def webhook():
         text = update["message"].get("text", "").strip()
 
         ensure_keys(chat_id)
-
-        # ------------------ استدعاء اختبار عبدالعزيز ------------------
-        if text == "عبدالعزيز":
-            try:
-                with open("questions.json", "r", encoding="utf-8") as f:
-                    questions = json.load(f)
-
-                users[chat_id]["questions"] = questions
-                users[chat_id]["current_chapter"] = "اختبار عبدالعزيز"
-                users[chat_id]["index"] = 0
-                users[chat_id]["score"] = 0
-                users[chat_id]["start_from"] = 0
-                users[chat_id]["lastTime"] = time.time()
-                users[chat_id]["waiting_jump"] = False
-                save_users()
-
-                send_message(chat_id, "تم بدء اختبار عبدالعزيز 🎯")
-                send_question(chat_id)
-            except:
-                send_message(chat_id, "⚠️ لم يتم العثور على ملف questions.json")
-            return "ok"
-        # ------------------------------------------------------------------
-
         user = users[chat_id]
+
+        # استدعاء اختبار عبدالعزيز
+        if text == "عبدالعزيز":
+            start_abdulaziz(chat_id)
+            return "ok"
 
         if check_inactivity(chat_id):
             return "ok"
 
+        # الانتقال إلى سؤال معيّن (نفس النظام لكل الاختبارات بما فيها عبدالعزيز)
         if user.get("waiting_jump"):
             if text.isdigit():
                 target = int(text) - 1
@@ -376,8 +377,10 @@ def webhook():
             return "ok"
 
         if user.get("questions"):
+            # داخل اختبار (أي اختبار، بما فيه عبدالعزيز)
             send_in_exam_controls(chat_id)
         else:
+            # خارج اختبار
             send_start_button(chat_id)
 
         return "ok"
@@ -403,8 +406,11 @@ def webhook():
             start_chapter(chat_id, chapter_name)
 
         elif data == "restart":
+            # إعادة الاختبار من نفس الفصل أو من اختبار عبدالعزيز
             chapter_name = user.get("current_chapter")
-            if chapter_name:
+            if chapter_name == "اختبار عبدالعزيز":
+                start_abdulaziz(chat_id)
+            elif chapter_name:
                 start_chapter(chat_id, chapter_name)
             else:
                 send_start_button(chat_id)
@@ -421,10 +427,17 @@ def webhook():
             if user.get("questions"):
                 questions = user.get("questions", [])
                 answered = max(0, user["index"] - user["start_from"])
-                send_message(
-                    chat_id,
-                    f"🛑 تم إيقاف الاختبار\nالنتيجة الحالية: {user['score']} من {answered}"
-                )
+                # إذا كان اختبار عبدالعزيز → صياغة خاصة
+                if user.get("current_chapter") == "اختبار عبدالعزيز":
+                    send_message(
+                        chat_id,
+                        f"🛑 تم إيقاف اختبار عبدالعزيز\nالنتيجة الحالية: {user['score']} من {answered}"
+                    )
+                else:
+                    send_message(
+                        chat_id,
+                        f"🛑 تم إيقاف الاختبار\nالنتيجة الحالية: {user['score']} من {answered}"
+                    )
             users.pop(chat_id, None)
             save_users()
             send_start_button(chat_id)
